@@ -44,6 +44,7 @@ import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceCreate, restoreWorkspaceSession } from "../dialog-workspace-create"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "@tui/context/args"
+import { probePaste } from "./paste-key"
 
 export type PromptProps = {
   sessionID?: string
@@ -198,6 +199,7 @@ export function Prompt(props: PromptProps) {
   const agentStyleId = syntax().getStyleId("extmark.agent")!
   const pasteStyleId = syntax().getStyleId("extmark.paste")!
   let promptPartTypeId = 0
+  let pasted = 0
   const event = useEvent()
 
   event.on(TuiEvent.PromptAppend.type, (evt) => {
@@ -338,14 +340,7 @@ export function Prompt(props: PromptProps) {
         category: "Prompt",
         hidden: true,
         onSelect: async () => {
-          const content = await Clipboard.read()
-          if (content?.mime.startsWith("image/")) {
-            await pasteAttachment({
-              filename: "clipboard",
-              mime: content.mime,
-              content: content.data,
-            })
-          }
+          await pasteClipboardAttachment()
         },
       },
       {
@@ -991,6 +986,19 @@ export function Prompt(props: PromptProps) {
     return
   }
 
+  async function pasteClipboardAttachment() {
+    const content = await Clipboard.read()
+    if (!content) return false
+    if (!content.mime.startsWith("image/") && content.mime !== "application/pdf") return false
+    await pasteAttachment({
+      filename: "clipboard",
+      mime: content.mime,
+      content: content.data,
+    })
+    pasted = Date.now()
+    return true
+  }
+
   const highlight = createMemo(() => {
     if (keybind.leader) return theme.border
     if (store.mode === "shell") return theme.primary
@@ -1110,18 +1118,9 @@ export function Prompt(props: PromptProps) {
                 // Check clipboard for images before terminal-handled paste runs.
                 // This helps terminals that forward Ctrl+V to the app; Windows
                 // Terminal 1.25+ usually handles Ctrl+V before this path.
-                if (keybind.match("input_paste", e)) {
-                  const content = await Clipboard.read()
-                  if (content?.mime.startsWith("image/")) {
-                    e.preventDefault()
-                    await pasteAttachment({
-                      filename: "clipboard",
-                      mime: content.mime,
-                      content: content.data,
-                    })
-                    return
-                  }
-                  // If no image, let the default paste behavior continue
+                if ((keybind.match("input_paste", e) || probePaste(e)) && (await pasteClipboardAttachment())) {
+                  e.preventDefault()
+                  return
                 }
                 if (keybind.match("input_clear", e) && store.prompt.input !== "") {
                   input.clear()
@@ -1200,7 +1199,14 @@ export function Prompt(props: PromptProps) {
                 // Windows Terminal <1.25 can surface image-only clipboard as an
                 // empty bracketed paste. Windows Terminal 1.25+ does not.
                 if (!pastedContent) {
-                  command.trigger("prompt.paste")
+                  if (Date.now() - pasted < 250) {
+                    event.preventDefault()
+                    return
+                  }
+                  if (await pasteClipboardAttachment()) {
+                    event.preventDefault()
+                    return
+                  }
                   return
                 }
 
