@@ -58,6 +58,7 @@ import { useKeybind } from "@tui/context/keybind"
 import { useDialog } from "../../ui/dialog"
 import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
+import { DialogPinnedContent } from "./dialog-pinned-content"
 import type { PromptInfo } from "../../component/prompt/history"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
@@ -243,6 +244,47 @@ export function Session() {
   let seeded = false
   let scroll: ScrollBoxRenderable
   let prompt: PromptRef | undefined
+
+  // 用于触发 stickyContent 重新计算的计数器信号
+  const [scrollTick, setScrollTick] = createSignal(0)
+  const bumpScrollTick = () => setScrollTick((n) => n + 1)
+
+  // 当消息变化时（含 stickyScroll 自动滚到底部的情况）延迟触发
+  createEffect(
+    on(messages, () => {
+      setTimeout(bumpScrollTick, 60)
+    }),
+  )
+
+  // 根据当前滚动位置计算应钉住的 user 消息
+  const stickyContent = createMemo(() => {
+    scrollTick() // 建立响应式依赖
+    if (!scroll) return undefined
+
+    const scrollY = scroll.y // scrollbox 顶部的屏幕行坐标
+    const children = scroll.getChildren()
+    const userMessages = messages().filter((m): m is UserMessage => m.role === "user")
+
+    let pinned: UserMessage | undefined
+    for (const m of userMessages) {
+      const child = children.find((c) => c.id === m.id)
+      if (!child) continue
+
+      if (child.y + child.height <= scrollY) {
+        // 整条消息已完全滚出视口顶部 → 钉住（避免与 scrollbox 内容重复显示）
+        pinned = m
+      } else {
+        // 消息顶部或底部还在视口内 → 停止
+        break
+      }
+    }
+    if (!pinned) return undefined
+    const parts = sync.data.part[pinned.id] ?? []
+    const textPart = parts.find((p): p is TextPart => p.type === "text" && !(p as TextPart).synthetic)
+    const text = textPart?.text?.trim()
+    if (!text) return undefined
+    return { message: pinned, text }
+  })
   const bind = (r: PromptRef | undefined) => {
     prompt = r
     promptRef.set(r)
@@ -1058,8 +1100,57 @@ export function Session() {
       <box flexDirection="row">
         <box flexGrow={1} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
           <Show when={session()}>
+            <Show when={stickyContent()}>
+              {(content) => {
+                const lines = createMemo(() => content().text.split("\n"))
+                const hasMore = createMemo(() => lines().length > 5)
+                const displayText = createMemo(() => lines().slice(0, 5).join("\n"))
+                return (
+                  <box
+                    flexShrink={0}
+                    border={["left"]}
+                    borderColor={local.agent.color(content().message.agent)}
+                    customBorderChars={SplitBorder.customBorderChars}
+                  >
+                    <box
+                      paddingLeft={2}
+                      paddingTop={1}
+                      paddingBottom={1}
+                      backgroundColor={theme.backgroundPanel}
+                      onMouseUp={
+                        hasMore()
+                          ? () => {
+                              if (renderer.getSelection()?.getSelectedText()) return
+                              dialog.replace(() => <DialogPinnedContent text={content().text} />)
+                            }
+                          : undefined
+                      }
+                    >
+                      <text fg={theme.text}>{displayText()}</text>
+                      <Show when={hasMore()}>
+                        <box justifyContent="center">
+                          <text fg={theme.textMuted}>...</text>
+                        </box>
+                      </Show>
+                    </box>
+                  </box>
+                )
+              }}
+            </Show>
             <scrollbox
-              ref={(r) => (scroll = r)}
+              ref={(r) => {
+                scroll = r
+                // patch handleKeyPress 以便键盘滚动后也能触发重新计算
+                const orig = r.handleKeyPress?.bind(r)
+                if (orig) {
+                  r.handleKeyPress = (key) => {
+                    const handled = orig(key)
+                    if (handled) bumpScrollTick()
+                    return handled
+                  }
+                }
+              }}
+              onMouseScroll={bumpScrollTick}
               viewportOptions={{
                 paddingRight: showScrollbar() ? 1 : 0,
               }}
