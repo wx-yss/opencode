@@ -131,6 +131,23 @@ export const layer = Layer.effect(
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
       yield* state.cancel(sessionID)
+      const model = yield* lastModel(sessionID)
+      const info: MessageV2.User = {
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID,
+        time: { created: Date.now() },
+        agent: (yield* sessions.get(sessionID)).agent ?? (yield* agents.defaultAgent()),
+        model,
+      }
+      yield* sessions.updateMessage(info)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: info.id,
+        sessionID,
+        type: "text",
+        text: "用户手动中断请求",
+      })
     })
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
