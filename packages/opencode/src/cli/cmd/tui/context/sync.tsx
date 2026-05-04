@@ -497,7 +497,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           if (fullSyncedSessions.has(sessionID)) return
           const [session, messages, todo, diff] = await Promise.all([
             sdk.client.session.get({ sessionID }, { throwOnError: true }),
-            sdk.client.session.messages({ sessionID, limit: 10000 }),
+            sdk.client.session.messages({ sessionID, limit: parseInt(process.env.OPENCODE_MESSAGE_LOAD_LIMIT ?? "10000") }),
             sdk.client.session.todo({ sessionID }),
             sdk.client.session.diff({ sessionID }),
           ])
