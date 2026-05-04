@@ -36,6 +36,21 @@ git fetch origin
 git merge origin/dev
 ```
 
+### 编译与同步
+
+改源码后需要编译替换系统二进制时，执行 `opencode-build`（`$GARDEN/bin/opencode-build`，自动 `bun build.ts --single --skip-install` → rm → cp）。
+
+需要同步上游版本时，执行 `opencode-sync`（`$GARDEN/bin/opencode-sync`，合并最新发布 tag → yss-custom → 打 tag → 调 opencode-build）。
+
+手动等效：
+```bash
+cd $OPENCODE_SRC
+git fetch origin --tags
+git merge vX.Y.Z -m "chore: 合并上游版本 vX.Y.Z → yss-custom"
+git tag "upstream/vX.Y.Z"
+opencode-build
+```
+
 ## Style Guide
 
 ### General Principles
