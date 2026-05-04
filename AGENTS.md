@@ -4,6 +4,38 @@
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
 
+## 自定义分支构建与替换
+
+本仓库 fork 到 `wx-yss/opencode`（remote `mine`），自定义分支 `yss-custom` 用于携带本地修改。
+
+**一键构建安装：** 终端执行 `opencode-build`（由 garden 项目 `$GARDEN/bin/opencode-build` 提供，自动编译并替换系统二进制）。
+
+手动步骤（备查）：
+```bash
+bun ./packages/opencode/script/build.ts --single --skip-install  # 编译
+rm ~/.opencode/bin/opencode                                       # 必须先删
+cp packages/opencode/dist/opencode-darwin-arm64/bin/opencode ~/.opencode/bin/opencode
+```
+
+- `--single`：只编译当前平台（darwin-arm64）
+- `--skip-install`：跳过跨平台原生依赖下载，大幅提速
+- **不能直接 `cp` 覆盖**，必须 `rm` 后再 `cp`，否则 macOS 缓存旧签名导致二进制 hang 住
+
+### 数据库共用
+
+自定义分支 channel 名会生成独立数据库（如 `opencode-yss-custom.db`），与官方 `opencode.db` 隔离导致历史 session 丢失。启动时设置环境变量共用同一库：
+
+```bash
+export OPENCODE_DISABLE_CHANNEL_DB=1
+```
+
+### 上游同步
+
+```bash
+git fetch origin
+git merge origin/dev
+```
+
 ## Style Guide
 
 ### General Principles
