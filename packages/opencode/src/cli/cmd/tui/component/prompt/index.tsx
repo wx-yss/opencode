@@ -1102,7 +1102,7 @@ export function Prompt(props: PromptProps) {
               textColor={keybind.leader ? theme.textMuted : theme.text}
               focusedTextColor={keybind.leader ? theme.textMuted : theme.text}
               minHeight={1}
-              maxHeight={6}
+              maxHeight={12}
               onContentChange={() => {
                 const value = input.plainText
                 setStore("prompt", "input", value)
