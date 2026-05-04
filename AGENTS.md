@@ -8,6 +8,8 @@
 
 本仓库 fork 到 `wx-yss/opencode`（remote `mine`），自定义分支 `yss-custom` 用于携带本地修改。
 
+**推送约束**：`yss-custom` 分支只推送到 `mine` remote（`git push mine yss-custom`），不推送到 `origin` 上游仓库。
+
 **一键构建安装：** 终端执行 `opencode-build`（由 garden 项目 `$GARDEN/bin/opencode-build` 提供，自动编译并替换系统二进制）。
 
 手动步骤（备查）：
