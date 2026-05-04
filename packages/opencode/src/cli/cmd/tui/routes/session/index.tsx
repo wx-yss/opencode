@@ -249,6 +249,9 @@ export function Session() {
   const [scrollTick, setScrollTick] = createSignal(0)
   const bumpScrollTick = () => setScrollTick((n) => n + 1)
 
+  // 记录上一次钉住的消息 ID，用于在钉住切换时把视口滚过原占位
+  const [prevPinnedId, setPrevPinnedId] = createSignal<string | null>(null)
+
   // 当消息变化时（含 stickyScroll 自动滚到底部的情况）延迟触发
   createEffect(
     on(messages, () => {
@@ -256,34 +259,42 @@ export function Session() {
     }),
   )
 
-  // 根据当前滚动位置计算应钉住的 user 消息
+  // 从最新往最早找，第一个顶部越过视口边界的消息就是钉住目标
   const stickyContent = createMemo(() => {
-    scrollTick() // 建立响应式依赖
+    scrollTick()
     if (!scroll) return undefined
-
-    const scrollY = scroll.y // scrollbox 顶部的屏幕行坐标
+    const scrollY = scroll.y
     const children = scroll.getChildren()
     const userMessages = messages().filter((m): m is UserMessage => m.role === "user")
 
-    let pinned: UserMessage | undefined
-    for (const m of userMessages) {
+    for (let i = userMessages.length - 1; i >= 0; i--) {
+      const m = userMessages[i]
       const child = children.find((c) => c.id === m.id)
       if (!child) continue
-
-      if (child.y + child.height <= scrollY) {
-        // 整条消息已完全滚出视口顶部 → 钉住（避免与 scrollbox 内容重复显示）
-        pinned = m
-      } else {
-        // 消息顶部或底部还在视口内 → 停止
-        break
+      if (child.y < scrollY) {
+        const parts = sync.data.part[m.id] ?? []
+        const textPart = parts.find((p): p is TextPart => p.type === "text" && !(p as TextPart).synthetic)
+        const text = textPart?.text?.trim()
+        if (text) return { message: m, text }
+        return undefined
       }
     }
-    if (!pinned) return undefined
-    const parts = sync.data.part[pinned.id] ?? []
-    const textPart = parts.find((p): p is TextPart => p.type === "text" && !(p as TextPart).synthetic)
-    const text = textPart?.text?.trim()
-    if (!text) return undefined
-    return { message: pinned, text }
+    return undefined
+  })
+  // 钉住切换时，把视口滚过刚钉住的消息，消除 scrollbox 里的残留占位
+  createEffect(() => {
+    const content = stickyContent()
+    if (!content || !scroll) {
+      setPrevPinnedId(null)
+      return
+    }
+    const id = content.message.id
+    if (id === prevPinnedId()) return
+    setPrevPinnedId(id)
+    const pinnedChild = scroll.getChildren().find((c) => c.id === id)
+    if (pinnedChild && pinnedChild.y + pinnedChild.height > scroll.y) {
+      scroll.scrollBy(pinnedChild.y + pinnedChild.height - scroll.y)
+    }
   })
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -1150,7 +1161,7 @@ export function Session() {
                   }
                 }
               }}
-              onMouseScroll={bumpScrollTick}
+              onMouseScroll={() => queueMicrotask(bumpScrollTick)}
               viewportOptions={{
                 paddingRight: showScrollbar() ? 1 : 0,
               }}
