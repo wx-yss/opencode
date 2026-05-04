@@ -14,21 +14,21 @@ export async function upgrade() {
   if (!latest) return
 
   if (Flag.OPENCODE_ALWAYS_NOTIFY_UPDATE) {
-    await Bus.publish(Installation.Event.UpdateAvailable, { version: latest })
+    await Bus.publish(Installation.Event.UpdateAvailable, { version: latest! })
     return
   }
 
   if (InstallationVersion === latest) return
 
-  const kind = Installation.getReleaseType(InstallationVersion, latest)
+  const kind = Installation.getReleaseType(InstallationVersion, latest!)
 
   if (config.autoupdate === "notify" || kind !== "patch") {
-    await Bus.publish(Installation.Event.UpdateAvailable, { version: latest })
+    await Bus.publish(Installation.Event.UpdateAvailable, { version: latest! })
     return
   }
 
   if (method === "unknown") return
-  await Installation.upgrade(method, latest)
-    .then(() => Bus.publish(Installation.Event.Updated, { version: latest }))
+  await Installation.upgrade(method, latest!)
+    .then(() => Bus.publish(Installation.Event.Updated, { version: latest! }))
     .catch(() => {})
 }
