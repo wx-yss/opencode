@@ -148,6 +148,12 @@ export function Session() {
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
   const pending = createMemo(() => {
+    const status = sync.data.session_status?.[route.sessionID]
+    // 当 session 不空闲时，始终用最后一个 assistant 作为队列判断基准
+    // 防止流式输出完成后 QUEUED 徽章意外消失
+    if (status?.type !== "idle") {
+      return messages().findLast((x) => x.role === "assistant")?.id
+    }
     return messages().findLast((x) => x.role === "assistant" && !x.time.completed)?.id
   })
 

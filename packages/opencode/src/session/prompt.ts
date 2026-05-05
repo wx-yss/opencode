@@ -1444,43 +1444,69 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         let step = 0
         const session = yield* sessions.get(sessionID)
 
+        function scanHead(msgs: MessageV2.WithParts[]) {
+          let user: MessageV2.User | undefined
+          let assistant: MessageV2.Assistant | undefined
+          let finished: MessageV2.Assistant | undefined
+          const queued: MessageV2.User[] = []
+          const tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
+
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const msg = msgs[i]
+            if (!assistant && msg.info.role === "assistant") assistant = msg.info
+            if (!finished && msg.info.role === "assistant" && msg.info.finish) finished = msg.info
+            if (assistant && finished) break
+            const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
+            if (task && !finished) tasks.push(...task)
+          }
+
+          const assistantMsg = assistant
+            ? msgs.findLast((m) => m.info.role === "assistant" && m.info.id === assistant.id)
+            : undefined
+          const toolCalls =
+            assistantMsg?.parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted) ?? false
+          const busy = assistant?.finish === "tool-calls" || toolCalls
+
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const msg = msgs[i]
+            if (msg.info.role !== "user") continue
+
+            if (assistant && msg.info.id > assistant.id) {
+              if (busy) {
+                queued.push(msg.info)
+              } else if (!user) {
+                user = msg.info
+              } else {
+                queued.push(msg.info)
+              }
+            } else if (!user) {
+              user = msg.info
+            }
+          }
+
+          if (!user) throw new Error("No user message found in stream. This should never happen.")
+
+          return { user, assistant, finished, toolCalls, busy, queued, tasks }
+        }
+
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
           yield* slog.info("loop", { step })
 
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+          const head = scanHead(msgs)
 
-          let lastUser: MessageV2.User | undefined
-          let lastAssistant: MessageV2.Assistant | undefined
-          let lastFinished: MessageV2.Assistant | undefined
-          let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const msg = msgs[i]
-            if (!lastUser && msg.info.role === "user") lastUser = msg.info
-            if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info
-            if (!lastFinished && msg.info.role === "assistant" && msg.info.finish) lastFinished = msg.info
-            if (lastUser && lastFinished) break
-            const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
-            if (task && !lastFinished) tasks.push(...task)
+          if (head.busy && head.queued.length > 0) {
+            msgs = msgs.filter((m) => !head.queued.some((q) => q.id === m.info.id))
           }
 
-          if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
-
-          const lastAssistantMsg = msgs.findLast(
-            (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
-          )
-          // Some providers return "stop" even when the assistant message contains tool calls.
-          // Keep the loop running so tool results can be sent back to the model.
-          // Skip provider-executed tool parts — those were fully handled within the
-          // provider's stream (e.g. DWS Agent Platform) and don't need a re-loop.
-          const hasToolCalls =
-            lastAssistantMsg?.parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted) ?? false
-
           if (
-            lastAssistant?.finish &&
-            !["tool-calls"].includes(lastAssistant.finish) &&
-            !hasToolCalls &&
-            lastUser.id < lastAssistant.id
+            head.assistant &&
+            head.assistant.finish &&
+            !["tool-calls"].includes(head.assistant.finish) &&
+            !head.toolCalls &&
+            head.assistant.parentID === head.user.id &&
+            head.queued.length === 0
           ) {
             yield* slog.info("exiting loop")
             break
@@ -1490,23 +1516,23 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           if (step === 1)
             yield* title({
               session,
-              modelID: lastUser.model.modelID,
-              providerID: lastUser.model.providerID,
+              modelID: head.user.model.modelID,
+              providerID: head.user.model.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
-          const task = tasks.pop()
+          const model = yield* getModel(head.user.model.providerID, head.user.model.modelID, sessionID)
+          const task = head.tasks.pop()
 
           if (task?.type === "subtask") {
-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+            yield* handleSubtask({ task, model, lastUser: head.user, sessionID, session, msgs })
             continue
           }
 
           if (task?.type === "compaction") {
             const result = yield* compaction.process({
               messages: msgs,
-              parentID: lastUser.id,
+              parentID: head.user.id,
               sessionID,
               auto: task.auto,
               overflow: task.overflow,
@@ -1516,19 +1542,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           }
 
           if (
-            lastFinished &&
-            lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
+            head.finished &&
+            head.finished.summary !== true &&
+            (yield* compaction.isOverflow({ tokens: head.finished.tokens, model }))
           ) {
-            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+            yield* compaction.create({ sessionID, agent: head.user.agent, model: head.user.model, auto: true })
             continue
           }
 
-          const agent = yield* agents.get(lastUser.agent)
+          const agent = yield* agents.get(head.user.agent)
           if (!agent) {
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
             const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+            const error = new NamedError.Unknown({ message: `Agent not found: "${head.user.agent}".${hint}` })
             yield* bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
@@ -1538,11 +1564,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
           const msg: MessageV2.Assistant = {
             id: MessageID.ascending(),
-            parentID: lastUser.id,
+            parentID: head.user.id,
             role: "assistant",
             mode: agent.name,
             agent: agent.name,
-            variant: lastUser.model.variant,
+            variant: head.user.model.variant,
             path: { cwd: ctx.directory, root: ctx.worktree },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -1566,15 +1592,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               agent,
               session,
               model,
-              tools: lastUser.tools,
+              tools: head.user.tools,
               processor: handle,
               bypassAgentCheck,
               messages: msgs,
             })
 
-            if (lastUser.format?.type === "json_schema") {
+            if (head.user.format?.type === "json_schema") {
               tools["StructuredOutput"] = createStructuredOutputTool({
-                schema: lastUser.format.schema,
+                schema: head.user.format.schema,
                 onSuccess(output) {
                   structured = output
                 },
@@ -1582,11 +1608,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             }
 
             if (step === 1)
-              yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
+              yield* summary.summarize({ sessionID, messageID: head.user.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-            if (step > 1 && lastFinished) {
-              for (const m of msgs) {
-                if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
+            if (step > 1 && !head.busy && head.queued.length > 0) {
+              for (const user of head.queued) {
+                const m = msgs.find((x) => x.info.id === user.id)
+                if (!m) continue
                 for (const p of m.parts) {
                   if (p.type !== "text" || p.ignored || p.synthetic) continue
                   if (!p.text.trim()) continue
@@ -1611,10 +1638,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
-            const format = lastUser.format ?? { type: "text" as const }
+            const format = head.user.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
-              user: lastUser,
+              user: head.user,
               agent,
               permission: session.permission,
               sessionID,
@@ -1649,8 +1676,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,
-                agent: lastUser.agent,
-                model: lastUser.model,
+                agent: head.user.agent,
+                model: head.user.model,
                 auto: true,
                 overflow: !handle.message.finish,
               })
