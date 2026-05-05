@@ -439,15 +439,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         // Hashline: inject ref-based edit params into edit tool schema
         // for models with strict JSON Schema validation (e.g. DeepSeek).
         if (item.id === "edit" && schema?.properties) {
-          schema.properties.content = { type: "string", description: "Replacement text when using startRef-based edits." }
-          schema.properties.operation = { type: "string", description: "Set to 'replace' to use startRef+content instead of oldString/newString. Triggers hash validation." }
-          schema.properties.ref = { type: "string", description: "Alias for startRef. Single-line ref from Read output, e.g. '3#A0C#393'." }
-          schema.properties.startRef = { type: "string", description: "Start ref from Read output, e.g. '3#A0C#393'. Validates target line content before replacing." }
-          schema.properties.endRef = { type: "string", description: "End ref for multi-line range replacement. Only used with startRef." }
-          schema.properties.fileRev = { type: "string", description: "REV token from Read output, e.g. '2ED9E6A9'. When set, edit fails if file hash mismatch." }
-          schema.properties.expectedFileHash = { type: "string", description: "Alternative to fileRev: expected full file hash for validation." }
-          schema.properties.safeReapply = { type: "boolean", description: "If true and edit fails, reapplies with refs adjusted to new context." }
-          schema.properties.operations = { type: "array", description: "Batch multiple same-file edits. Replaces oldString/newString when set.", items: { type: "object", properties: { op: { type: "string", enum: ["replace", "replace_range"] }, ref: { type: "string", description: "Single-line ref" }, startRef: { type: "string", description: "Start ref" }, endRef: { type: "string", description: "End ref for range" }, content: { type: "string", description: "Replacement content" } }, required: ["op", "content"] } }
+          // Hashline ref params are placed BEFORE oldString/newString in the schema
+          // so LLMs prefer them as the primary edit mechanism.
+          schema.properties = {
+            content: { type: "string", description: "Replacement text when using startRef-based edits." },
+            operation: { type: "string", description: "Set to 'replace' to use startRef+content instead of oldString/newString. Triggers hash validation." },
+            ref: { type: "string", description: "Alias for startRef. Single-line ref from Read output, e.g. '3#A0C#393'." },
+            startRef: { type: "string", description: "Start ref from Read output, e.g. '3#A0C#393'. Validates target line content before replacing." },
+            endRef: { type: "string", description: "End ref for multi-line range replacement. Only used with startRef." },
+            fileRev: { type: "string", description: "REV token from Read output, e.g. '2ED9E6A9'. When set, edit fails if file hash mismatch." },
+            expectedFileHash: { type: "string", description: "Alternative to fileRev: expected full file hash for validation." },
+            safeReapply: { type: "boolean", description: "If true and edit fails, reapplies with refs adjusted to new context." },
+            operations: { type: "array", description: "Batch multiple same-file edits. Replaces oldString/newString when set.", items: { type: "object", properties: { op: { type: "string", enum: ["replace", "replace_range"] }, ref: { type: "string", description: "Single-line ref" }, startRef: { type: "string", description: "Start ref" }, endRef: { type: "string", description: "End ref for range" }, content: { type: "string", description: "Replacement content" } }, required: ["op", "content"] } },
+            ...schema.properties,
+          }
           // oldString/newString optional when hashline ref-params are used
           if (Array.isArray(schema.required)) {
             schema.required = schema.required.filter((r) => r !== "oldString" && r !== "newString")
