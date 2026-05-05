@@ -1355,6 +1355,8 @@ function UserMessage(props: {
 }) {
   const ctx = use()
   const local = useLocal()
+  const sdk = useSDK()
+  const promptRef = usePromptRef()
   const text = createMemo(() => {
     const texts = props.parts
       .map((x) => {
@@ -1385,6 +1387,7 @@ function UserMessage(props: {
           borderColor={color()}
           customBorderChars={SplitBorder.customBorderChars}
           marginTop={props.index === 0 ? 0 : 1}
+          flexDirection="row"
         >
           <box
             onMouseOver={() => {
@@ -1398,7 +1401,7 @@ function UserMessage(props: {
             paddingBottom={1}
             paddingLeft={2}
             backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
-            flexShrink={0}
+            flexGrow={1}
           >
             <text fg={theme.text}>{text()}</text>
             <Show when={files().length}>
@@ -1437,6 +1440,32 @@ function UserMessage(props: {
               </text>
             </Show>
           </box>
+          <Show when={queued()}>
+            <box
+              justifyContent="center"
+              paddingLeft={2}
+              paddingRight={2}
+              onMouseUp={(evt) => {
+                evt.stopPropagation()
+                const input = text()
+                if (input && promptRef.current) {
+                  const existing = promptRef.current.current.input
+                  promptRef.current.set({
+                    ...promptRef.current.current,
+                    input: existing ? existing + "\n--- QUEUE BACK ---\n" + input : input,
+                  })
+                }
+                void sdk.client.session.deleteMessage({
+                  sessionID: ctx.sessionID,
+                  messageID: props.message.id,
+                })
+              }}
+            >
+              <text>
+                <span style={{ bg: theme.error, fg: theme.background, bold: true }}> [X] </span>
+              </text>
+            </box>
+          </Show>
         </box>
       </Show>
       <Show when={compaction()}>
